@@ -103,6 +103,8 @@ interface HeimanPrivateCluster {
         thi: number;
         heatIndex: number;
         soundVolume: number;
+        radarMicroCurrentSnr: number[];
+        radarPersenceCurrentSnr: number[];
 
         // Light/Switch 0x1000~0x1FFF
         indicatorLightControl: number;
@@ -528,6 +530,8 @@ const heimanExtend = {
                 thi: {name: "thi", ID: 0x0035, type: Zcl.DataType.UINT16},
                 heatIndex: {name: "heatIndex", ID: 0x0036, type: Zcl.DataType.INT16},
                 soundVolume: {name: "soundVolume", ID: 0x0047, type: Zcl.DataType.UINT8, write: true},
+                radarMicroCurrentSnr: {name: "radarMicroCurrentSnr", ID: 0x004a, type: Zcl.DataType.OCTET_STR},
+                radarPersenceCurrentSnr: {name: "radarPersenceCurrentSnr", ID: 0x004b, type: Zcl.DataType.OCTET_STR},
 
                 // Light/Switch 0x1000~0x1FFF
                 indicatorLightControl: {name: "indicatorLightControl", ID: 0x1000, type: Zcl.DataType.BITMAP8, write: true},
@@ -1578,6 +1582,7 @@ const heimanExtend = {
             attribute: {ID: attributeId, type: Zcl.DataType.UINT16},
             description: "device fault state",
             access: "STATE_GET",
+            entityCategory: "diagnostic",
         });
         const fromZigbee = [
             {
@@ -1986,6 +1991,7 @@ const heimanExtend = {
             attribute: "dewPoint",
             description: "Dew point",
             access: "STATE_GET",
+            homeassistant: {name: "Dew point"},
         }),
     vpd: () =>
         m.numeric<"heimanClusterSpecial", HeimanPrivateCluster>({
@@ -2021,6 +2027,7 @@ const heimanExtend = {
             attribute: "reportedPackages",
             description: "for diagnostic purpose, how many zigbee packages has the reported in a day.",
             access: "STATE_GET",
+            entityCategory: "diagnostic",
             ...args,
         }),
     rejoinedCount: (args?: Partial<m.NumericArgs<"heimanClusterSpecial", HeimanPrivateCluster>>) =>
@@ -2033,6 +2040,7 @@ const heimanExtend = {
             attribute: "rejoinedCount",
             description: "for diagnostic purpose, how many times has the product rejoined to zigbee network.",
             access: "STATE_GET",
+            entityCategory: "diagnostic",
             ...args,
         }),
     rebootedCount: (args?: Partial<m.NumericArgs<"heimanClusterSpecial", HeimanPrivateCluster>>) =>
@@ -2045,6 +2053,7 @@ const heimanExtend = {
             attribute: "rebootedCount",
             description: "for diagnostic purpose, how many times has the product rebooted.",
             access: "STATE_GET",
+            entityCategory: "diagnostic",
             ...args,
         }),
 };
@@ -2359,6 +2368,18 @@ export const definitions: DefinitionWithExtend[] = [
         exposes: [e.carbon_monoxide(), e.battery_low(), e.battery()],
     },
     {
+        zigbeeModel: ["JM720ES-EF-3.0"],
+        model: "HS-720ES-ZB",
+        vendor: "Heiman",
+        description: "Smart carbon monoxide alarm",
+        extend: [
+            m.battery(),
+            m.identify(),
+            m.iasZoneAlarm({zoneType: "carbon_monoxide", zoneAttributes: ["alarm_1", "tamper", "battery_low"]}),
+            m.iasWarning(),
+        ],
+    },
+    {
         zigbeeModel: ["PIRSensor-N", "PIRSensor-N-3.0", "PIRSensor-EM", "PIRSensor-EF-3.0", "PIR_TPV13"],
         model: "HS3MS",
         vendor: "Heiman",
@@ -2530,8 +2551,36 @@ export const definitions: DefinitionWithExtend[] = [
         zigbeeModel: ["D1-EF2-3.0"],
         model: "D1-EFA",
         vendor: "Heiman",
-        description: "Door sensor",
+        description: "Smart door sensor",
         extend: [m.battery(), m.iasZoneAlarm({zoneType: "contact", zoneAttributes: ["alarm_1", "battery_low", "tamper"]})],
+    },
+    {
+        zigbeeModel: ["D1-E"],
+        model: "D1-E",
+        vendor: "Heiman",
+        description: "Smart door sensor",
+        configure: async (device, coordinatorEndpoint) => {
+            const endpoint = device.getEndpoint(1);
+            await reporting.bind(endpoint, coordinatorEndpoint, ["genPowerCfg", "heimanClusterSpecial"]);
+            await reporting.batteryPercentageRemaining(endpoint);
+            await endpoint.read("ssIasZone", ["zoneStatus", "zoneState", "iasCieAddr", "zoneId"]);
+            await endpoint.read<"heimanClusterSpecial", HeimanPrivateCluster>(
+                "heimanClusterSpecial",
+                ["indicatorLightLevelControlOf1", "rebootedCount", "rejoinedCount", "reportedPackages"],
+                {
+                    manufacturerCode: Zcl.ManufacturerCode.HEIMAN_TECHNOLOGY_CO_LTD,
+                },
+            );
+        },
+        extend: [
+            m.battery(),
+            m.iasZoneAlarm({zoneType: "contact", zoneAttributes: ["alarm_1", "battery_low", "tamper"]}),
+            heimanExtend.heimanClusterSpecial(),
+            heimanExtend.heimanClusterIndicatorLight("alarm_indicator"),
+            heimanExtend.reportedPackages(),
+            heimanExtend.rejoinedCount(),
+            heimanExtend.rebootedCount(),
+        ],
     },
     {
         zigbeeModel: ["DoorSensor-EM", "DoorSensor-EF-3.0"],
@@ -4475,7 +4524,6 @@ export const definitions: DefinitionWithExtend[] = [
                     "radarLearningState",
                     "radarDetectionTargetRange",
                     "occupanyControlOnOffIlluminanceThreshold",
-                    "radarDetectionMinRange",
                     "radarDetectionMaxRange",
                     "humidityOffset",
                     "temperatureOffset",
@@ -4523,18 +4571,6 @@ export const definitions: DefinitionWithExtend[] = [
                 access: "ALL",
             }),
             m.numeric<"heimanClusterSpecial", HeimanPrivateCluster>({
-                name: "radar_detection_min_range",
-                unit: "m",
-                valueMin: 0,
-                valueMax: 6,
-                valueStep: 0.25,
-                scale: 100,
-                cluster: "heimanClusterSpecial",
-                attribute: "radarDetectionMinRange",
-                description: "The minimum detection range of the radar",
-                access: "ALL",
-            }),
-            m.numeric<"heimanClusterSpecial", HeimanPrivateCluster>({
                 name: "radar_detection_max_range",
                 unit: "m",
                 valueMin: 0,
@@ -4576,16 +4612,25 @@ export const definitions: DefinitionWithExtend[] = [
             heimanExtend.temperatureOffset(),
             heimanExtend.humidityOffset(),
             m.binary<"heimanClusterSpecial", HeimanPrivateCluster>({
-                name: "learning_control",
+                name: "radar_learning",
                 valueOn: ["start", 65534],
-                valueOff: ["reset", 65535],
+                valueOff: ["idle", 0],
                 cluster: "heimanClusterSpecial",
                 attribute: "radarLearningControl",
-                description: "Radar learning mode, please wake up the device first.",
+                description: "Radar learning. Please keep it unoccupied.",
+                access: "ALL",
+            }),
+            m.binary<"heimanClusterSpecial", HeimanPrivateCluster>({
+                name: "radar_learning_reset",
+                valueOn: ["reset", 65535],
+                valueOff: ["idle", 0],
+                cluster: "heimanClusterSpecial",
+                attribute: "radarLearningControl",
+                description: "Reset radar learning and restore default parameters.",
                 access: "ALL",
             }),
             m.enumLookup<"heimanClusterSpecial", HeimanPrivateCluster>({
-                name: "learning_state",
+                name: "radar_learning_state",
                 lookup: {normal: 0, learning: 1, completed: 2, failed: 3},
                 cluster: "heimanClusterSpecial",
                 attribute: "radarLearningState",
